@@ -46,13 +46,21 @@
 function normalizeInput(line){
   line = line.trim();
   if(!line) return null;
-  // DOI aus bioRxiv-URL extrahieren
-  const m = line.match(/\/content\/(10\.1101\/[0-9.\-v]+)/i);
-  if(m) return m[1];
-  // roher DOI?
-  if(/^10\.1101\//i.test(line)) return line;
-  return null;
+
+  // 1) DOI aus bioRxiv/medRxiv-URL ziehen – Versionsteil (v1, v2, …) ignorieren
+  const m = line.match(/\/content\/(10\.1101\/[0-9.\-]+)(?:v\d+)?/i);
+  if (m) return m[1]; // bereits versionlos
+
+  // 2) Rohe DOI erlaubt: "10.1101/2025.08.14.670313v1"
+  if (/^10\.1101\//i.test(line)) {
+    return line
+      .replace(/v\d+$/i, '')     // Versionssuffix entfernen
+      .replace(/[.,;]+$/,'');    // evtl. angehängte Satzzeichen abschneiden
+  }
+
+  return null; // nichts Erkennbares
 }
+
 
 function authorListToDisplay(str){
   // bioRxiv liefert "Nachname, Vorname; Nachname, Vorname; ..."
