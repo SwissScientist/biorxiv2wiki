@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>bioRxiv → MediaWiki (Publication/Labeling)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;line-height:1.45}
+    h1{font-size:1.4rem;margin:0 0 1rem}
+    textarea,input,button{font-size:1rem}
+    textarea{width:100%;min-height:140px}
+    .row{margin:1rem 0}
+    .result{border:1px solid #ddd;border-radius:8px;padding:0.75rem;margin:1rem 0;background:#fafafa}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;white-space:pre-wrap}
+    .muted{color:#777}
+    .grid{display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:center}
+    .small{font-size:.9rem}
+    .ok{color:#146c2e}
+    .err{color:#b00020}
+    .spinner{display:inline-block;width:1em;height:1em;border:.18em solid #ccc;border-top-color:#555;border-radius:50%;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .foot{margin-top:2rem;color:#666}
+    .btn{padding:.55rem .8rem;border:1px solid #aaa;border-radius:8px;background:#fff;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+  </style>
+</head>
+<body>
+  <h1>bioRxiv → MediaWiki (Publication & leeres Labeling)</h1>
+  <p class="small muted">Gib einen oder mehrere Einträge an (je Zeile **DOI** oder **bioRxiv-URL**, z.&nbsp;B. <code>https://www.biorxiv.org/content/10.1101/2025.08.14.670313v1</code> oder <code>10.1101/2025.08.14.670313v1</code>).</p>
+
+  <div class="row">
+    <textarea id="input" placeholder="Eine DOI/URL pro Zeile…"></textarea>
+  </div>
+
+  <div class="grid">
+    <div class="small muted">Quelle: api.biorxiv.org/details/biorxiv/&lt;DOI&gt;/na/json</div>
+    <div>
+      <button id="run" class="btn">Generieren</button>
+    </div>
+  </div>
+
+  <div id="status" class="row small"></div>
+  <div id="out"></div>
+
+<script>
+function normalizeInput(line){
+  line = line.trim();
+  if(!line) return null;
+  // DOI aus bioRxiv-URL extrahieren
+  const m = line.match(/\/content\/(10\.1101\/[0-9.\-v]+)/i);
+  if(m) return m[1];
+  // roher DOI?
+  if(/^10\.1101\//i.test(line)) return line;
+  return null;
+}
+
+function authorListToDisplay(str){
+  // bioRxiv liefert "Nachname, Vorname; Nachname, Vorname; ..."
+  return str.split(";").map(s=>{
+    s = s.trim();
+    if(!s) return null;
+    if(s.includes(",")){
+      const [last, first] = s.split(",",2).map(x=>x.trim());
+      return `${last} ${first}`;
+    }
+    return s;
+  }).filter(Boolean).join(", ");
+}
+
+function yearFromDate(d){
+  // erwartet YYYY-MM-DD
+  if(typeof d === "string" && d.length >= 4) return d.slice(0,4);
+  return "";
+}
+
+function buildBlocks(meta){
+  const title   = (meta.title||"").trim();
+  const abstract= (meta.abstract||"").trim();
+  const doi     = (meta.doi||"").trim();
+  const date    = (meta.date||"").trim();
+  const year    = yearFromDate(date);
+  const authors = authorListToDisplay(meta.authors||"");
+  const infoURL = `http://biorxiv.org/content/${doi}`;
+
+  const publication =
+`{{Publication
+|title=${authors} (${year}) ${title}. bioRxiv doi.org/${doi}.
+|info=[${infoURL} bioRxiv Preprint Open Access]
+|authors=${authors}
+|year=${year}
+|journal=bioRxiv
+|abstract=${abstract}
+|keywords=
+|editor=
+|mipnetlab=
+}}
+`;
+
+  const labeling =
+`{{Labeling
+|area=
+|diseases=
+|organism=
+|tissues=
+|preparations=
+|couplingstates=
+|pathways=
+|instruments=
+}}
+`;
+
+  return publication + labeling;
+}
+
+async function fetchBiorxiv(doi){
+  const url = `https://api.biorxiv.org/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
+  const r = await fetch(url, {method:"GET"});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const json = await r.json();
+  if(!json.collection || !Array.isArray(json.collection) || json.collection.length===0){
+    throw new Error("Keine Daten erhalten");
+  }
+  // passendes DOI-Objekt wählen (oder erstes)
+  const item = json.collection.find(e => (e.doi||"").toLowerCase() === doi.toLowerCase()) || json.collection[0];
+  return item;
+}
+
+function makeResultCard(wikitext, meta, ok=true, errorMsg=""){
+  const wrap = document.createElement("div");
+  wrap.className = "result";
+
+  const head = document.createElement("div");
+  head.innerHTML = ok
+      ? `<span class="ok">✓</span> <strong>${meta?.title ? meta.title : "Ergebnis"}</strong>`
+      : `<span class="err">⚠</span> <strong>Fehler</strong> – ${errorMsg}`;
+  wrap.appendChild(head);
+
+  const ta = document.createElement("textarea");
+  ta.className = "mono";
+  ta.rows = 16;
+  ta.readOnly = true;
+  ta.value = wikitext || "";
+  wrap.appendChild(ta);
+
+  const bar = document.createElement("div");
+  bar.style.marginTop = ".5rem";
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.textContent = "In Zwischenablage kopieren";
+  btn.onclick = async ()=>{
+    try{
+      await navigator.clipboard.writeText(ta.value);
+      btn.textContent = "Kopiert ✓";
+      setTimeout(()=>btn.textContent="In Zwischenablage kopieren", 1000);
+    }catch(e){
+      alert("Kopieren fehlgeschlagen: " + e.message);
+    }
+  };
+  bar.appendChild(btn);
+  wrap.appendChild(bar);
+
+  return wrap;
+}
+
+document.getElementById("run").addEventListener("click", async ()=>{
+  const src = document.getElementById("input").value.trim();
+  const out = document.getElementById("out");
+  const status = document.getElementById("status");
+  out.innerHTML = "";
+  status.textContent = "";
+
+  const lines = src.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const dois = lines.map(normalizeInput).filter(Boolean);
+  const bad  = lines.filter(s=>!normalizeInput(s));
+  if(dois.length===0){
+    status.innerHTML = '<span class="err">Bitte mindestens eine gültige DOI oder bioRxiv-URL angeben.</span>';
+    return;
+  }
+  if(bad.length){
+    status.innerHTML = `<span class="err">Ignoriert (kein DOI erkannt):</span> ${bad.map(s=>`<code>${s}</code>`).join(", ")}`;
+  }
+
+  const total = dois.length;
+  let done = 0;
+  const prog = document.createElement("div");
+  prog.className = "small";
+  prog.innerHTML = `<span class="spinner"></span> Verarbeite ${total} Eintrag(e)…`;
+  status.appendChild(prog);
+
+  for(const doi of dois){
+    try{
+      const meta = await fetchBiorxiv(doi);
+      const wikitext = buildBlocks(meta);
+      out.appendChild(makeResultCard(wikitext, meta, true, ""));
+    }catch(e){
+      out.appendChild(makeResultCard("", null, false, `${doi}: ${e.message}`));
+    }finally{
+      done++;
+      prog.textContent = `Fertig: ${done}/${total}`;
+    }
+  }
+});
+</script>
+
+  <p class="foot small">Hinweis: Daten via Cold Spring Harbor Laboratory API (bioRxiv). <span class="muted">Kein Tracking, keine Speicherung.</span></p>
+</body>
+</html>
+
+Add index.html
