@@ -113,7 +113,7 @@ function buildBlocks(meta){
 }
 
 async function fetchBiorxiv(doi){
-  const url = `https://api.biorxiv.org/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
+  const url = `https://biorxiv-proxy.marcsath77.workers.dev/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
   const r = await fetch(url, {method:"GET"});
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
