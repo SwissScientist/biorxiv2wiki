@@ -26,14 +26,19 @@
 </head>
 <body>
   <h1>bioRxiv → MediaWiki (Publication & leeres Labeling)</h1>
-  <p class="small muted">Gib einen oder mehrere Einträge an (je Zeile **DOI** oder **bioRxiv-URL**, z.&nbsp;B. <code>https://www.biorxiv.org/content/10.1101/2025.08.14.670313v1</code> oder <code>10.1101/2025.08.14.670313v1</code>).</p>
+  <p class="small muted">
+    Gib einen oder mehrere Einträge an (je Zeile <strong>DOI</strong> oder <strong>bioRxiv-URL</strong>, z.&nbsp;B.
+    <code>https://www.biorxiv.org/content/10.1101/2025.08.14.670313v1</code> oder <code>10.1101/2025.08.14.670313v1</code>).
+  </p>
 
   <div class="row">
     <textarea id="input" placeholder="Eine DOI/URL pro Zeile…"></textarea>
   </div>
 
   <div class="grid">
-    <div class="small muted">Quelle: api.biorxiv.org/details/biorxiv/&lt;DOI&gt;/na/json</div>
+    <div class="small muted">
+      Quelle: <code>https://biorxiv-proxy.marcsath77.workers.dev/details/biorxiv/&lt;DOI&gt;/na/json</code>
+    </div>
     <div>
       <button id="run" class="btn">Generieren</button>
     </div>
@@ -43,14 +48,16 @@
   <div id="out"></div>
 
 <script>
+const PROXY_ORIGIN = "https://biorxiv-proxy.marcsath77.workers.dev";
+
 function normalizeInput(line){
   line = line.trim();
   if(!line) return null;
   // DOI aus bioRxiv-URL extrahieren
-  const m = line.match(/\/content\/(10\.1101\/[0-9.\-v]+)/i);
+  const m = line.match(/\/content\/(10\.1101\/[0-9.]+(?:v\d+)?)/i);
   if(m) return m[1];
   // roher DOI?
-  if(/^10\.1101\//i.test(line)) return line;
+  if(/^10\.1101\/[0-9.]+(?:v\d+)?$/i.test(line)) return line;
   return null;
 }
 
@@ -80,7 +87,7 @@ function buildBlocks(meta){
   const date    = (meta.date||"").trim();
   const year    = yearFromDate(date);
   const authors = authorListToDisplay(meta.authors||"");
-  const infoURL = `http://biorxiv.org/content/${doi}`;
+  const infoURL = `https://www.biorxiv.org/content/${doi}`;
 
   const publication =
 `{{Publication
@@ -113,7 +120,10 @@ function buildBlocks(meta){
 }
 
 async function fetchBiorxiv(doi){
-  const url = `https://biorxiv-proxy.marcsath77.workers.dev/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
+  // Always call the proxy; let the Worker deal with decoding etc.
+  const url = `${PROXY_ORIGIN}/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
+  // Optional: help with debugging
+  console.log("Fetching via proxy:", url);
   const r = await fetch(url, {method:"GET"});
   if(!r.ok) throw new Error(`HTTP ${r.status}`);
   const json = await r.json();
@@ -205,5 +215,6 @@ document.getElementById("run").addEventListener("click", async ()=>{
   <p class="foot small">Hinweis: Daten via Cold Spring Harbor Laboratory API (bioRxiv). <span class="muted">Kein Tracking, keine Speicherung.</span></p>
 </body>
 </html>
+
 
 Add index.html
