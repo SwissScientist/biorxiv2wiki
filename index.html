@@ -26,14 +26,14 @@
 </head>
 <body>
   <h1>bioRxiv → MediaWiki (Publication & leeres Labeling)</h1>
-  <p class="small muted">Gib einen oder mehrere Einträge an (je Zeile <strong>DOI</strong> oder <strong>bioRxiv/medRxiv-URL</strong>, z.&nbsp;B. <code>https://www.biorxiv.org/content/10.1101/2025.08.14.670313v1</code> oder <code>10.1101/2025.08.14.670313v1</code>).</p>
+  <p class="small muted">Gib einen oder mehrere Einträge an (je Zeile **DOI** oder **bioRxiv-URL**, z.&nbsp;B. <code>https://www.biorxiv.org/content/10.1101/2025.08.14.670313v1</code> oder <code>10.1101/2025.08.14.670313v1</code>).</p>
 
   <div class="row">
     <textarea id="input" placeholder="Eine DOI/URL pro Zeile…"></textarea>
   </div>
 
   <div class="grid">
-    <div class="small muted">Quelle (über Worker): /bx/details/(biorxiv|medrxiv)/10.1101/&lt;DOI&gt;/na/json – Fallback: /cr/works/10.1101/&lt;DOI&gt;</div>
+    <div class="small muted">Quelle: api.biorxiv.org/details/biorxiv/&lt;DOI&gt;/na/json</div>
     <div>
       <button id="run" class="btn">Generieren</button>
     </div>
@@ -43,25 +43,15 @@
   <div id="out"></div>
 
 <script>
-// ====== KONFIGURATION ======
-const WORKER_BASE = "https://biorxiv-proxy.marcsath77.workers.dev";
-
-// ====== HILFSFUNKTIONEN ======
 function normalizeInput(line){
   line = line.trim();
   if(!line) return null;
-
-  // 1) DOI aus bioRxiv/medRxiv-URL ziehen – Versionsteil (v1, v2, …) ignorieren
-  const m = line.match(/\/content\/(10\.1101\/[0-9.\-]+)(?:v\d+)?/i);
-  if (m) return m[1]; // bereits versionlos
-
-  // 2) Rohe DOI erlaubt: "10.1101/2025.08.14.670313v1"
-  if (/^10\.1101\//i.test(line)) {
-    return line
-      .replace(/v\d+$/i, '')     // Versionssuffix entfernen
-      .replace(/[.,;]+$/,'');    // evtl. angehängte Satzzeichen
-  }
-  return null; // nichts Erkennbares
+  // DOI aus bioRxiv-URL extrahieren
+  const m = line.match(/\/content\/(10\.1101\/[0-9.\-v]+)/i);
+  if(m) return m[1];
+  // roher DOI?
+  if(/^10\.1101\//i.test(line)) return line;
+  return null;
 }
 
 function authorListToDisplay(str){
@@ -78,32 +68,9 @@ function authorListToDisplay(str){
 }
 
 function yearFromDate(d){
+  // erwartet YYYY-MM-DD
   if(typeof d === "string" && d.length >= 4) return d.slice(0,4);
   return "";
-}
-
-function stripTags(s){ return s ? s.replace(/<[^>]+>/g, '') : ""; }
-
-// Crossref → unser Meta-Format mappen (falls bio/medRxiv nicht lieferbar)
-function crossrefToMeta(cr){
-  const m = cr && cr.message ? cr.message : {};
-  const title = Array.isArray(m.title) ? m.title[0] : (m.title || "");
-  const year  = (m["published-print"]?.["date-parts"]?.[0]?.[0]) ||
-                (m["published-online"]?.["date-parts"]?.[0]?.[0]) ||
-                (m.created?.["date-parts"]?.[0]?.[0]) || "";
-  const abstract = stripTags(m.abstract || "");
-  const authors = (m.author || []).map(a=>{
-    const last = a.family || "";
-    const first = a.given || "";
-    return `${last} ${first}`.trim();
-  }).join(", ");
-  return {
-    title,
-    abstract,
-    date: (year ? `${year}-01-01` : ""),
-    doi: (m.DOI || ""),
-    authors
-  };
 }
 
 function buildBlocks(meta){
@@ -145,60 +112,27 @@ function buildBlocks(meta){
   return publication + labeling;
 }
 
-// ====== API-AUFRUFE (über Worker) ======
-async function fetchFromBiorxivOrMedrxiv(doiNoV){
-  // probiere zuerst bioRxiv, dann medRxiv
-  for (const server of ["biorxiv","medrxiv"]) {
-    const url = `${WORKER_BASE}/bx/details/${server}/${doiNoV}/na/json`;
-    try {
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const j = await r.json();
-      if (j.collection && Array.isArray(j.collection) && j.collection.length) {
-        const hit = j.collection.find(e => (e.doi||"").toLowerCase().startsWith(doiNoV.toLowerCase()));
-        return hit || j.collection[0];
-      }
-    } catch(_) {
-      // weiter zum nächsten Server oder Fallback
-    }
+async function fetchBiorxiv(doi){
+  const url = `https://api.biorxiv.org/details/biorxiv/${encodeURIComponent(doi)}/na/json`;
+  const r = await fetch(url, {method:"GET"});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const json = await r.json();
+  if(!json.collection || !Array.isArray(json.collection) || json.collection.length===0){
+    throw new Error("Keine Daten erhalten");
   }
-  return null;
+  // passendes DOI-Objekt wählen (oder erstes)
+  const item = json.collection.find(e => (e.doi||"").toLowerCase() === doi.toLowerCase()) || json.collection[0];
+  return item;
 }
 
-async function fetchFromCrossref(doiNoV){
-  const url = `${WORKER_BASE}/cr/works/${doiNoV}`;
-  try {
-    const r = await fetch(url);
-    if (!r.ok) return null;
-    const j = await r.json();
-    const meta = crossrefToMeta(j);
-    if (!meta.title) return null;
-    return meta;
-  } catch(_) {
-    return null;
-  }
-}
-
-async function fetchMeta(doiInput){
-  const base = doiInput.replace(/v\d+$/i,''); // DOI ohne v#
-  // 1) bioRxiv/medRxiv bevorzugt (besseres Abstract)
-  const bx = await fetchFromBiorxivOrMedrxiv(base);
-  if (bx) return bx;
-  // 2) Crossref-Fallback
-  const cr = await fetchFromCrossref(base);
-  if (cr) return cr;
-  throw new Error("Keine Daten erhalten (bioRxiv/medRxiv/Crossref)");
-}
-
-// ====== UI-Helfer ======
 function makeResultCard(wikitext, meta, ok=true, errorMsg=""){
   const wrap = document.createElement("div");
   wrap.className = "result";
 
   const head = document.createElement("div");
   head.innerHTML = ok
-    ? `<span class="ok">✓</span> <strong>${meta?.title ? meta.title : "Ergebnis"}</strong>`
-    : `<span class="err">⚠</span> <strong>Fehler</strong> – ${errorMsg}`;
+      ? `<span class="ok">✓</span> <strong>${meta?.title ? meta.title : "Ergebnis"}</strong>`
+      : `<span class="err">⚠</span> <strong>Fehler</strong> – ${errorMsg}`;
   wrap.appendChild(head);
 
   const ta = document.createElement("textarea");
@@ -228,7 +162,6 @@ function makeResultCard(wikitext, meta, ok=true, errorMsg=""){
   return wrap;
 }
 
-// ====== EVENT-HANDLER ======
 document.getElementById("run").addEventListener("click", async ()=>{
   const src = document.getElementById("input").value.trim();
   const out = document.getElementById("out");
@@ -240,7 +173,7 @@ document.getElementById("run").addEventListener("click", async ()=>{
   const dois = lines.map(normalizeInput).filter(Boolean);
   const bad  = lines.filter(s=>!normalizeInput(s));
   if(dois.length===0){
-    status.innerHTML = '<span class="err">Bitte mindestens eine gültige DOI oder bioRxiv/medRxiv-URL angeben.</span>';
+    status.innerHTML = '<span class="err">Bitte mindestens eine gültige DOI oder bioRxiv-URL angeben.</span>';
     return;
   }
   if(bad.length){
@@ -256,7 +189,7 @@ document.getElementById("run").addEventListener("click", async ()=>{
 
   for(const doi of dois){
     try{
-      const meta = await fetchMeta(doi);
+      const meta = await fetchBiorxiv(doi);
       const wikitext = buildBlocks(meta);
       out.appendChild(makeResultCard(wikitext, meta, true, ""));
     }catch(e){
@@ -269,9 +202,8 @@ document.getElementById("run").addEventListener("click", async ()=>{
 });
 </script>
 
-  <p class="foot small">Hinweis: Daten via Cold Spring Harbor Laboratory API (bioRxiv/medRxiv) und Crossref. <span class="muted">Kein Tracking, keine Speicherung.</span></p>
+  <p class="foot small">Hinweis: Daten via Cold Spring Harbor Laboratory API (bioRxiv). <span class="muted">Kein Tracking, keine Speicherung.</span></p>
 </body>
 </html>
-
 
 Add index.html
